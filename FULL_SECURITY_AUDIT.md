@@ -21,6 +21,7 @@
 11. [API Infrastructure](#11-api-infrastructure)
 12. [Compliance Gap Analysis](#12-compliance-gap-analysis)
 13. [Complete Finding Summary](#13-complete-finding-summary)
+14. [OData $metadata Exposure — Full API Schema Leak](#14-odata-metadata-exposure--full-api-schema-leak)
 
 ---
 
@@ -332,10 +333,12 @@ The `ServiceSiteId` is static (`f77b9ff7-1c84-4e14-ac51-ae67bb908b58`) across al
 |---|---------|-----------|
 | C1 | **Admin pages (csr/sponsor/advisor) accessible without authentication** — return full page with ServiceConfig | 9.1 |
 | C2 | **Session tokens leaked** on unauthenticated admin pages (Token, LSToken, Sid) | 8.6 |
-| C3 | **TLS 1.0 and 1.1 enabled** — PCI DSS violation, deprecated cryptographic protocols | 7.5 |
-| C4 | **jQuery 1.8.3** — 4 known XSS CVEs, on page handling SSNs | 7.5 |
-| C5 | **CORS allows all origins** with PUT/DELETE — combined with empty CSRF = cross-origin attacks | 7.4 |
-| C6 | **No Content Security Policy** — inline script execution, no XSS mitigation | 7.0 |
+| C3 | **OData `$metadata` exposes `passwdTxt` (plaintext password) and `ssNum` (SSN) fields** in Token entity schema | 8.2 |
+| C4 | **OData `$metadata` returns full 191KB API schema** without authentication — 60+ entity types exposed | 7.5 |
+| C5 | **TLS 1.0 and 1.1 enabled** — PCI DSS violation, deprecated cryptographic protocols | 7.5 |
+| C6 | **jQuery 1.8.3** — 4 known XSS CVEs, on page handling SSNs | 7.5 |
+| C7 | **CORS allows all origins** with PUT/DELETE — combined with empty CSRF = cross-origin attacks | 7.4 |
+| C8 | **No Content Security Policy** — inline script execution, no XSS mitigation | 7.0 |
 
 ### 🟡 High (Fix within 1 week)
 
@@ -352,16 +355,84 @@ The `ServiceSiteId` is static (`f77b9ff7-1c84-4e14-ac51-ae67bb908b58`) across al
 
 | # | Finding | CVSS Est. |
 |---|---------|-----------|
-| M1 | **No `robots.txt`** — search engines may index admin pages | 4.0 |
-| M2 | **No `security.txt`** — no responsible disclosure guidance | 3.0 |
-| M3 | **Directory listing** for `/script/`, `/templates/`, `/resources/` | 4.0 |
-| M4 | **SameSite cookie attribute missing** on all cookies | 4.0 |
-| M5 | **No Subresource Integrity** (SRI) on script tags | 4.0 |
-| M6 | **ELMAH/trace.axd return 200** — confirm existence of diagnostic tools | 3.5 |
-| M7 | **MFA fingerprint is low-entropy** — only ~20 boolean/string data points | 3.5 |
-| M8 | **P3P header with broad permissions** — privacy policy concern | 3.0 |
-| M9 | **Empty Set-Cookie header** — misconfigured cookie handling | 2.5 |
-| M10 | **Developer email exposed** in sha256 debug file comments | 2.0 |
+| M1 | **`ISOCountryCodes` OData endpoint returns data without authentication** — confirms inconsistent auth enforcement | 5.0 |
+| M2 | **Pre-auth token generation consumes server resources** on every anonymous request (session flooding risk) | 5.3 |
+| M3 | **No `robots.txt`** — search engines may index admin pages | 4.0 |
+| M4 | **No `security.txt`** — no responsible disclosure guidance | 3.0 |
+| M5 | **Directory listing** for `/script/`, `/templates/`, `/resources/` | 4.0 |
+| M6 | **SameSite cookie attribute missing** on all cookies | 4.0 |
+| M7 | **No Subresource Integrity** (SRI) on script tags | 4.0 |
+| M8 | **ELMAH/trace.axd return 200** — confirm existence of diagnostic tools | 3.5 |
+| M9 | **MFA fingerprint is low-entropy** — only ~20 boolean/string data points | 3.5 |
+| M10 | **P3P header with broad permissions** — privacy policy concern | 3.0 |
+| M11 | **Empty Set-Cookie header** — misconfigured cookie handling | 2.5 |
+| M12 | **Developer email exposed** in sha256 debug file comments | 2.0 |
+
+---
+
+## 14. OData $metadata Exposure — Full API Schema Leak
+
+> **Full analysis:** See **[ODATA_API_EXPOSURE.md](./ODATA_API_EXPOSURE.md)** for the complete 60+ entity inventory, field-level analysis, and fix recommendations.
+
+### Finding
+
+The OData `$metadata` endpoint at `https://www.accountplanaccess.com/nextlevelapi/$metadata` returns a **191KB XML schema** describing the entire API — **without any authentication**.
+
+```bash
+curl -s "https://www.accountplanaccess.com/nextlevelapi/\$metadata" | wc -c
+# → 195,891 bytes — full Entity Data Model returned to anonymous visitors
+```
+
+### Critical Data Exposed in Schema
+
+**Token entity reveals plaintext password and SSN fields:**
+```xml
+<EntityType Name="Token">
+  <Property Name="ssNum" Type="Edm.String" />          <!-- Social Security Number -->
+  <Property Name="passwdTxt" Type="Edm.String" />      <!-- PLAINTEXT PASSWORD -->
+  <Property Name="userNam" Type="Edm.String" />         <!-- Username -->
+  <Property Name="tokenString" Type="Edm.String" />     <!-- Auth token -->
+</EntityType>
+```
+
+**PersonalData entity reveals full PII structure:**
+- Full legal name, DOB, hire date, marital status, sex
+- Full mailing address (including foreign addresses)
+- Three phone numbers with country codes
+
+**Financial entities reveal retirement account data model:**
+- `Distributions` — Roth/non-Roth vested balances, terminations
+- `LoanModel` / `NewLoan` — Loan calculations and applications
+- `MyPortfolioData` — Current investment portfolio
+- `TransRequestWithdrawal` — Withdrawal requests
+- 60+ total entity types
+
+### Unauthenticated Data Endpoint
+
+The `ISOCountryCodes` endpoint returns data without authentication:
+```bash
+curl -s "https://www.accountplanaccess.com/nextlevelapi/ISOCountryCodes"
+# → 248 country records returned, no auth required
+```
+
+### Pre-Auth Token Format
+
+Tokens from the login page are hex-encoded AES ciphertext:
+```
+Hex:     4661456C4555314668325673...
+Decoded: FaElEU1Fh2VsSWCSW1fTsA==uEqcPPfkDQnWUZ0d33SsD53gP2ooomPe/lGtmsZaW0gA
+Format:  <base64-IV>==<base64-ciphertext>
+```
+
+Tokens **rotate per request** but the `ServiceSiteId` (`f77b9ff7-1c84-4e14-ac51-ae67bb908b58`) is static.
+
+### Severity
+
+| Finding | CVSS Est. |
+|---------|-----------|
+| $metadata exposes full API schema (191KB) | 7.5 |
+| Token entity reveals `passwdTxt` and `ssNum` fields | 8.2 |
+| ISOCountryCodes returns data without auth | 5.0 |
 
 ---
 
@@ -369,10 +440,10 @@ The `ServiceSiteId` is static (`f77b9ff7-1c84-4e14-ac51-ae67bb908b58`) across al
 
 | Timeline | Actions |
 |----------|---------|
-| **24 hours** | Restrict admin pages (csr/sponsor/advisor) to authenticated sessions only; disable TLS 1.0/1.1 |
-| **72 hours** | Implement Content-Security-Policy; fix CORS to restrict origins; generate real CSRF tokens |
-| **1 week** | Upgrade jQuery to 3.7.x; remove test credentials from JS; add SameSite to all cookies |
-| **2 weeks** | Add SRI hashes; create robots.txt and security.txt; remove debug JS; return 404 for elmah/trace |
+| **24 hours** | Restrict `$metadata` endpoint to authenticated users; restrict admin pages (csr/sponsor/advisor) to authenticated sessions only; disable TLS 1.0/1.1 |
+| **72 hours** | Implement Content-Security-Policy; fix CORS to restrict origins; generate real CSRF tokens; require auth for `ISOCountryCodes` and all OData endpoints |
+| **1 week** | Upgrade jQuery to 3.7.x; remove test credentials from JS; add SameSite to all cookies; rename `passwdTxt` field; implement bcrypt/Argon2 for password storage |
+| **2 weeks** | Add SRI hashes; create robots.txt and security.txt; remove debug JS; return 404 for elmah/trace; add OData query restrictions ($select/$filter/$expand limits); rate-limit pre-auth token generation |
 | **1 month** | Plan AngularJS migration; implement modern MFA fingerprinting; security penetration test |
 
 ---

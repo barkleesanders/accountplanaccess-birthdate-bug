@@ -1,10 +1,35 @@
-# Birthdate Bug Analysis — accountplanaccess.com
+# Security Audit & Bug Report — accountplanaccess.com
 
-> **Responsible Disclosure:** This report documents front-end bugs found on a publicly accessible login page. No authentication was bypassed, no data was accessed, and no exploit was performed. This report is intended to help the vendor (Broadridge) fix the issue. The vendor has been notified via their official security disclosure channel (`Security@broadridge.com`).
+> **Responsible Disclosure:** This report documents front-end bugs and security vulnerabilities found on publicly accessible pages of the NextLevel retirement plan administration platform. No authentication was bypassed, no participant data was accessed, and no exploit was performed. This report is intended to help the vendor (Broadridge/FIS) fix the issues. The vendor has been notified via their official security disclosure channel (`Security@broadridge.com`).
 
-> **📋 [View Recommended Fixes, Upgrade Path, Impact Assessment & Legal Analysis →](./FIXES_AND_RECOMMENDATIONS.md)**
+## Reports
 
-## Summary
+| Document | Description |
+|----------|-------------|
+| **[This README](#birthdate-bug-analysis)** | Birthdate validation bugs preventing credential reset |
+| **[Full Security Audit](./FULL_SECURITY_AUDIT.md)** | SSL/TLS, HTTP headers, exposed admin pages, session tokens, directory exposure, JS CVEs, MFA weaknesses, cookie security, compliance gaps |
+| **[OData API Exposure](./ODATA_API_EXPOSURE.md)** | Unauthenticated `$metadata` endpoint leaking full 191KB API schema including plaintext password and SSN fields across 60+ entity types |
+| **[Deep Dive: SHA-256 & Architecture](./DEEP_DIVE_SHA256_AND_ARCHITECTURE.md)** | Exposed test credentials, internal API endpoints, MFA/OTP flow architecture, Schwab PCRA integration |
+| **[Fixes & Recommendations](./FIXES_AND_RECOMMENDATIONS.md)** | Actionable fixes for all bugs and vulnerabilities, dependency upgrades, AI prompt for automated remediation, legal exposure analysis |
+
+## Critical Findings Summary
+
+| # | Severity | Finding | Report |
+|---|----------|---------|--------|
+| 1 | **CRITICAL** | Admin pages (csr/sponsor/advisor) return 200 with session tokens to unauthenticated visitors | [Full Audit](./FULL_SECURITY_AUDIT.md#4-exposed-pages--unauthenticated-admin-access) |
+| 2 | **CRITICAL** | OData `$metadata` exposes full API schema (191KB, 60+ entities) without auth — includes `passwdTxt` and `ssNum` fields | [OData Exposure](./ODATA_API_EXPOSURE.md#2-metadata-endpoint--full-schema-exposure) |
+| 3 | **CRITICAL** | Token entity schema reveals plaintext password field (`passwdTxt`) and SSN field (`ssNum`) | [OData Exposure](./ODATA_API_EXPOSURE.md#3-token-entity--plaintext-password-field) |
+| 4 | **CRITICAL** | Session tokens (Token, LSToken, Sid) leaked on every unauthenticated page load | [Full Audit](./FULL_SECURITY_AUDIT.md#5-session-token-leakage) |
+| 5 | **CRITICAL** | TLS 1.0 and 1.1 enabled — PCI DSS violation | [Full Audit](./FULL_SECURITY_AUDIT.md#1-ssltls-configuration) |
+| 6 | **CRITICAL** | jQuery 1.8.3 with 4 known XSS CVEs on pages handling SSNs | [Full Audit](./FULL_SECURITY_AUDIT.md#7-javascript-library-inventory--cves) |
+| 7 | **HIGH** | Hardcoded test credentials in `reliusadmin.min.js` including FIS employee email | [Deep Dive](./DEEP_DIVE_SHA256_AND_ARCHITECTURE.md#2-exposed-serviceconfig-test-credentials) |
+| 8 | **HIGH** | Birthdate validation completely broken — prevents credential reset | [Below](#birthdate-bug-analysis) |
+
+---
+
+## Birthdate Bug Analysis
+
+### Summary
 
 The front-end source code of `https://www.accountplanaccess.com/NextLevel/default.aspx` contains **multiple bugs** in the birthdate validation pipeline on the **"Request Credentials"** (forgot password) form. The birthdate field (`BIRTHDATE1`) fails validation due to a combination of a broken datepicker configuration and a flawed `isDate()` function.
 
@@ -126,10 +151,13 @@ Entering `12/25/25` (intending 1925) would be interpreted as **2025**, which is 
 
 ## Security Observations
 
-While analyzing the code, the following additional issues were noted:
+While analyzing the code and API, the following additional issues were noted. See the [Full Security Audit](./FULL_SECURITY_AUDIT.md) and [OData API Exposure](./ODATA_API_EXPOSURE.md) reports for complete details.
 
 | Finding | Severity | Detail |
 |---------|----------|--------|
+| OData `$metadata` exposes full API schema without auth | **Critical** | 191KB schema reveals 60+ entity types including `passwdTxt` (plaintext password) and `ssNum` (SSN) fields — [details](./ODATA_API_EXPOSURE.md) |
+| Token entity reveals plaintext password storage | **Critical** | `passwdTxt` field name strongly implies passwords stored/transmitted as plaintext — [details](./ODATA_API_EXPOSURE.md#3-token-entity--plaintext-password-field) |
+| `ISOCountryCodes` returns data without auth | Medium | Confirms inconsistent authentication enforcement across OData endpoints |
 | SSN field transmitted in plain text over POST | Medium | `INITIALSSN` field value is sent without client-side encryption |
 | CSRF token appears static/empty | Low | `ServiceConfig.CSRFToken=''` is empty in the page source |
 | Anti-clickjacking via JS (not headers) | Low | Uses `<style>body{display:none}</style>` + JS instead of `X-Frame-Options` / CSP headers |
@@ -151,11 +179,13 @@ If you encounter this bug:
 
 ## Vendor Disclosure
 
-- **Vendor:** Broadridge Financial Solutions (NextLevel platform)
+- **Vendor:** Broadridge Financial Solutions / FIS (Fidelity National Information Services)
+- **Platform:** NextLevel (Relius Admin Web) — retirement plan administration
 - **Disclosure channel:** `Security@broadridge.com` (per [Broadridge Security Capabilities page](https://www.broadridge.com/about/security-capabilities))
 - **HackerOne:** [hackerone.com/broadridge](https://hackerone.com/broadridge) (Vulnerability Disclosure Policy)
 - **Date discovered:** February 25, 2026
 - **Status:** Reported
+- **SSL Certificate Org:** Fidelity National Information Services (FIS)
 
 ---
 

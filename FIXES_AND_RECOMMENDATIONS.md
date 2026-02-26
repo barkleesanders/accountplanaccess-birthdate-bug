@@ -7,10 +7,11 @@
 ## Table of Contents
 
 1. [Critical Bug Fixes](#critical-bug-fixes)
-2. [Security Fixes](#security-fixes)
-3. [Dependency Upgrades](#dependency-upgrades)
-4. [Claude Code Prompt for Automated Fix](#claude-code-prompt-for-automated-fix)
-5. [Impact Assessment & Legal Exposure](#impact-assessment--legal-exposure)
+2. [API & OData Fixes](#api--odata-fixes)
+3. [Security Fixes](#security-fixes)
+4. [Dependency Upgrades](#dependency-upgrades)
+5. [Claude Code Prompt for Automated Fix](#claude-code-prompt-for-automated-fix)
+6. [Impact Assessment & Legal Exposure](#impact-assessment--legal-exposure)
 
 ---
 
@@ -197,6 +198,127 @@ if (yyyy < 100) {
     }
     return false;
 }
+```
+
+---
+
+## API & OData Fixes
+
+### Fix A1: Restrict $metadata Endpoint (CRITICAL)
+
+The OData `$metadata` endpoint returns the full 191KB API schema without authentication, exposing all 60+ entity types including field names like `passwdTxt` (plaintext password) and `ssNum` (SSN).
+
+**Option A — web.config restriction:**
+```xml
+<location path="nextlevelapi/$metadata">
+  <system.web>
+    <authorization>
+      <deny users="?" />
+    </authorization>
+  </system.web>
+</location>
+```
+
+**Option B — OData middleware filter:**
+```csharp
+// Custom DelegatingHandler to block unauthenticated $metadata access
+public class MetadataAuthHandler : DelegatingHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        if (request.RequestUri.AbsolutePath.Contains("$metadata") &&
+            !request.GetRequestContext().Principal.Identity.IsAuthenticated)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
+        }
+        return base.SendAsync(request, cancellationToken);
+    }
+}
+```
+
+---
+
+### Fix A2: Rename `passwdTxt` and Implement Proper Password Hashing (CRITICAL)
+
+The Token entity field name `passwdTxt` implies plaintext password storage/transmission. Even if the client hashes with SHA-256, unsalted SHA-256 is inadequate.
+
+**Step 1 — Rename the field:**
+```csharp
+// Before
+public string passwdTxt { get; set; }
+
+// After
+public string passwdDigest { get; set; }
+```
+
+**Step 2 — Implement bcrypt server-side:**
+```csharp
+// NuGet: Install-Package BCrypt.Net-Next
+using BCrypt.Net;
+
+// Registration: hash the client-submitted SHA-256 with bcrypt
+string bcryptHash = BCrypt.HashPassword(clientSha256Hash, workFactor: 12);
+
+// Login: verify against stored bcrypt hash
+bool valid = BCrypt.Verify(clientSha256Hash, storedBcryptHash);
+```
+
+**Step 3 — Migration plan:**
+1. Add `passwdDigest` column alongside `passwdTxt`
+2. On next login, verify against `passwdTxt` (SHA-256), then bcrypt-hash and store in `passwdDigest`
+3. Once all active users have migrated, remove `passwdTxt` column
+
+---
+
+### Fix A3: Require Authentication on All OData Endpoints (HIGH)
+
+The `ISOCountryCodes` endpoint returns data without authentication. Apply a global authorization filter:
+
+```csharp
+// Global OData authorization
+public static class WebApiConfig
+{
+    public static void Register(HttpConfiguration config)
+    {
+        // Apply [Authorize] globally to all OData controllers
+        config.Filters.Add(new AuthorizeAttribute());
+    }
+}
+```
+
+---
+
+### Fix A4: Rate-Limit Pre-Auth Token Generation (MEDIUM)
+
+Every anonymous request to `/NextLevel/` generates server-side cryptographic tokens, consuming resources. Implement rate limiting:
+
+```xml
+<!-- IIS Dynamic IP Restrictions in web.config -->
+<system.webServer>
+  <security>
+    <dynamicIpSecurity>
+      <denyByConcurrentRequests enabled="true" maxConcurrentRequests="10" />
+      <denyByRequestRate enabled="true" maxRequests="30"
+                         requestIntervalInMilliseconds="5000" />
+    </dynamicIpSecurity>
+  </security>
+</system.webServer>
+```
+
+---
+
+### Fix A5: Add OData Query Restrictions (MEDIUM)
+
+Prevent excessive data extraction by limiting OData query capabilities:
+
+```csharp
+// On sensitive controllers
+[Page(MaxTop = 50)]
+[Count(Disabled = true)]
+[Select(SelectType = SelectExpandType.Allowed)]
+[Filter(Disabled = true)] // or whitelist specific filterable properties
+public class PersonalDatasController : ODataController { }
 ```
 
 ---
@@ -429,11 +551,16 @@ NextLevel is a **retirement plan administration platform**. Under ERISA:
 
 | Priority | Fix | Deadline |
 |----------|-----|----------|
+| 🔴 P0 | Restrict `$metadata` endpoint to authenticated users (Fix A1) | **24 hours** |
 | 🔴 P0 | Fix `data-date-end-date` attribute (Bug 1) | **24 hours** |
+| 🔴 P0 | Rename `passwdTxt` field; implement bcrypt (Fix A2) | **1 week** |
 | 🔴 P0 | Upgrade jQuery 1.8.3 → 3.7.x | **1 week** |
+| 🟡 P1 | Require auth on all OData endpoints including ISOCountryCodes (Fix A3) | **1 week** |
 | 🟡 P1 | Fix `isDate()` silent failure (Bug 2) | **1 week** |
 | 🟡 P1 | Add security headers (X-Frame-Options, CSP) | **1 week** |
 | 🟡 P1 | Fix CSRF token generation | **1 week** |
+| 🟢 P2 | Rate-limit pre-auth token generation (Fix A4) | **2 weeks** |
+| 🟢 P2 | Add OData query restrictions (Fix A5) | **2 weeks** |
 | 🟢 P2 | Fix double validation (Bug 3) | **2 weeks** |
 | 🟢 P2 | Fix year cutoff (Bug 4) | **2 weeks** |
 | 🟢 P2 | Remove debug JS, dead libraries | **2 weeks** |
