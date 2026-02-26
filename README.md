@@ -2,6 +2,8 @@
 
 > **Responsible Disclosure:** This report documents front-end bugs found on a publicly accessible login page. No authentication was bypassed, no data was accessed, and no exploit was performed. This report is intended to help the vendor (Broadridge) fix the issue. The vendor has been notified via their official security disclosure channel (`Security@broadridge.com`).
 
+> **📋 [View Recommended Fixes, Upgrade Path, Impact Assessment & Legal Analysis →](./FIXES_AND_RECOMMENDATIONS.md)**
+
 ## Summary
 
 The front-end source code of `https://www.accountplanaccess.com/NextLevel/default.aspx` contains **multiple bugs** in the birthdate validation pipeline on the **"Request Credentials"** (forgot password) form. The birthdate field (`BIRTHDATE1`) fails validation due to a combination of a broken datepicker configuration and a flawed `isDate()` function.
