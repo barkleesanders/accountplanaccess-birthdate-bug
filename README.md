@@ -1,29 +1,115 @@
 # Security Audit & Bug Report — accountplanaccess.com
 
-> **Responsible Disclosure:** This report documents front-end bugs and security vulnerabilities found on publicly accessible pages of the NextLevel retirement plan administration platform. No authentication was bypassed, no participant data was accessed, and no exploit was performed. This report is intended to help the vendor (Broadridge/FIS) fix the issues. The vendor has been notified via their official security disclosure channel (`Security@broadridge.com`).
+> **Responsible Disclosure:** This report documents front-end bugs and security vulnerabilities found on publicly accessible pages of the NextLevel retirement plan administration platform (Relius Admin Web). No authentication was bypassed, no participant data was accessed, and no exploit was performed. This report is intended to help the vendor (Broadridge/FIS) fix the issues.
 
-## Reports
+> **Vendor:** Broadridge Financial Solutions / FIS (Fidelity National Information Services)
+> **Platform:** NextLevel (Relius Admin Web) — retirement plan administration
+> **Disclosure channel:** `Security@broadridge.com` | [HackerOne](https://hackerone.com/broadridge)
+> **Date discovered:** February 25, 2026
+> **Status:** Reported
+
+---
+
+## Executive Summary
+
+The NextLevel platform at `accountplanaccess.com` — a retirement plan administration system handling 401(k) accounts, Social Security Numbers, and financial data — has **critical security vulnerabilities** across its publicly accessible attack surface.
+
+The most severe finding is that the **OData `$metadata` endpoint returns the entire 191KB API schema without authentication**, exposing 60+ entity types including a `Token` entity with fields named `passwdTxt` (plaintext password) and `ssNum` (Social Security Number). Additionally, admin portals (CSR, Sponsor, Advisor) serve full page HTML with session tokens to unauthenticated visitors, TLS 1.0/1.1 are enabled in violation of PCI DSS, and the platform runs jQuery 1.8.3 with 4 known XSS CVEs on pages that collect SSNs.
+
+A broken datepicker configuration also prevents users from resetting their credentials via the self-service form.
+
+---
+
+## Detailed Reports
 
 | Document | Description |
 |----------|-------------|
-| **[This README](#birthdate-bug-analysis)** | Birthdate validation bugs preventing credential reset |
-| **[Full Security Audit](./FULL_SECURITY_AUDIT.md)** | SSL/TLS, HTTP headers, exposed admin pages, session tokens, directory exposure, JS CVEs, MFA weaknesses, cookie security, compliance gaps |
-| **[OData API Exposure](./ODATA_API_EXPOSURE.md)** | Unauthenticated `$metadata` endpoint leaking full 191KB API schema including plaintext password and SSN fields across 60+ entity types |
-| **[Deep Dive: SHA-256 & Architecture](./DEEP_DIVE_SHA256_AND_ARCHITECTURE.md)** | Exposed test credentials, internal API endpoints, MFA/OTP flow architecture, Schwab PCRA integration |
-| **[Fixes & Recommendations](./FIXES_AND_RECOMMENDATIONS.md)** | Actionable fixes for all bugs and vulnerabilities, dependency upgrades, AI prompt for automated remediation, legal exposure analysis |
+| **[OData API Exposure](./ODATA_API_EXPOSURE.md)** | Unauthenticated `$metadata` endpoint leaks full 191KB API schema — 60+ entity types including plaintext password and SSN fields, financial balances, PII structure, and complete transaction model |
+| **[Full Security Audit](./FULL_SECURITY_AUDIT.md)** | SSL/TLS configuration, HTTP headers, exposed admin pages, session token leakage, directory exposure, JavaScript CVE inventory, MFA weaknesses, cookie security, compliance gap analysis |
+| **[Deep Dive: SHA-256 & Architecture](./DEEP_DIVE_SHA256_AND_ARCHITECTURE.md)** | Exposed test credentials in production JS, internal API endpoints, full MFA/OTP flow architecture, Charles Schwab PCRA integration details |
+| **[Fixes & Recommendations](./FIXES_AND_RECOMMENDATIONS.md)** | Actionable code fixes for all bugs and vulnerabilities, dependency upgrade path, AI prompt for automated remediation, ERISA/SEC legal exposure analysis |
 
-## Critical Findings Summary
+---
 
-| # | Severity | Finding | Report |
-|---|----------|---------|--------|
-| 1 | **CRITICAL** | Admin pages (csr/sponsor/advisor) return 200 with session tokens to unauthenticated visitors | [Full Audit](./FULL_SECURITY_AUDIT.md#4-exposed-pages--unauthenticated-admin-access) |
-| 2 | **CRITICAL** | OData `$metadata` exposes full API schema (191KB, 60+ entities) without auth — includes `passwdTxt` and `ssNum` fields | [OData Exposure](./ODATA_API_EXPOSURE.md#2-metadata-endpoint--full-schema-exposure) |
-| 3 | **CRITICAL** | Token entity schema reveals plaintext password field (`passwdTxt`) and SSN field (`ssNum`) | [OData Exposure](./ODATA_API_EXPOSURE.md#3-token-entity--plaintext-password-field) |
-| 4 | **CRITICAL** | Session tokens (Token, LSToken, Sid) leaked on every unauthenticated page load | [Full Audit](./FULL_SECURITY_AUDIT.md#5-session-token-leakage) |
-| 5 | **CRITICAL** | TLS 1.0 and 1.1 enabled — PCI DSS violation | [Full Audit](./FULL_SECURITY_AUDIT.md#1-ssltls-configuration) |
-| 6 | **CRITICAL** | jQuery 1.8.3 with 4 known XSS CVEs on pages handling SSNs | [Full Audit](./FULL_SECURITY_AUDIT.md#7-javascript-library-inventory--cves) |
-| 7 | **HIGH** | Hardcoded test credentials in `reliusadmin.min.js` including FIS employee email | [Deep Dive](./DEEP_DIVE_SHA256_AND_ARCHITECTURE.md#2-exposed-serviceconfig-test-credentials) |
-| 8 | **HIGH** | Birthdate validation completely broken — prevents credential reset | [Below](#birthdate-bug-analysis) |
+## All Findings
+
+### Critical
+
+| # | Finding | CVSS | Report |
+|---|---------|------|--------|
+| C1 | **Admin pages (csr/sponsor/advisor) return 200 with session tokens** to unauthenticated visitors | 9.1 | [Full Audit §4](./FULL_SECURITY_AUDIT.md#4-exposed-pages--unauthenticated-admin-access) |
+| C2 | **Session tokens leaked** (Token, LSToken, Sid) on every unauthenticated page load | 8.6 | [Full Audit §5](./FULL_SECURITY_AUDIT.md#5-session-token-leakage) |
+| C3 | **Token entity exposes `passwdTxt` (plaintext password) and `ssNum` (SSN)** in OData schema | 8.2 | [OData §3](./ODATA_API_EXPOSURE.md#3-token-entity--plaintext-password-field) |
+| C4 | **OData `$metadata` returns full 191KB API schema** without authentication — 60+ entity types | 7.5 | [OData §2](./ODATA_API_EXPOSURE.md#2-metadata-endpoint--full-schema-exposure) |
+| C5 | **TLS 1.0 and 1.1 enabled** — PCI DSS violation, deprecated protocols | 7.5 | [Full Audit §1](./FULL_SECURITY_AUDIT.md#1-ssltls-configuration) |
+| C6 | **jQuery 1.8.3** — 4 known XSS CVEs on pages handling SSNs | 7.5 | [Full Audit §7](./FULL_SECURITY_AUDIT.md#7-javascript-library-inventory--cves) |
+| C7 | **CORS allows all origins** with PUT/DELETE + empty CSRF token | 7.4 | [Full Audit §2](./FULL_SECURITY_AUDIT.md#2-http-security-headers) |
+| C8 | **No Content Security Policy** — inline scripts, no XSS mitigation | 7.0 | [Full Audit §2](./FULL_SECURITY_AUDIT.md#2-http-security-headers) |
+
+### High
+
+| # | Finding | CVSS | Report |
+|---|---------|------|--------|
+| H1 | **Hardcoded test credentials** in `reliusadmin.min.js` — tokens, FIS employee email, internal API URLs | 5.5 | [Deep Dive §2](./DEEP_DIVE_SHA256_AND_ARCHITECTURE.md#2-exposed-serviceconfig-test-credentials) |
+| H2 | **AngularJS 1.x** — end-of-life since Dec 2021, no security patches | 6.5 | [Full Audit §7](./FULL_SECURITY_AUDIT.md#7-javascript-library-inventory--cves) |
+| H3 | **Empty CSRF token** — `ServiceConfig.CSRFToken=''` on all pages | 6.5 | [Full Audit §13](./FULL_SECURITY_AUDIT.md#13-complete-finding-summary) |
+| H4 | **SHA-256 without salt** for MFA device comparison — reversible via rainbow tables | 6.0 | [Deep Dive §1](./DEEP_DIVE_SHA256_AND_ARCHITECTURE.md#1-the-sha-256-library) |
+| H5 | **Birthdate validation broken** — prevents credential reset for all users | — | [Below](#birthdate-bug-analysis) |
+
+### Medium
+
+| # | Finding | CVSS | Report |
+|---|---------|------|--------|
+| M1 | `ISOCountryCodes` endpoint returns data without authentication | 5.0 | [OData §6](./ODATA_API_EXPOSURE.md#6-unauthenticated-data-endpoints) |
+| M2 | Pre-auth tokens consume server resources on every anonymous request | 5.3 | [OData §7](./ODATA_API_EXPOSURE.md#7-pre-auth-token-analysis) |
+| M3 | SSN field (`INITIALSSN`) transmitted without client-side encryption | 4.5 | [Fixes §Fix 7](./FIXES_AND_RECOMMENDATIONS.md#fix-7-ssn-transmission) |
+| M4 | Directory listing enabled for `/script/`, `/templates/`, `/resources/` | 4.0 | [Full Audit §6](./FULL_SECURITY_AUDIT.md#6-directory--file-exposure) |
+| M5 | SameSite cookie attribute missing on all cookies | 4.0 | [Full Audit §9](./FULL_SECURITY_AUDIT.md#9-cookie-security) |
+| M6 | MFA fingerprint is low-entropy (~20 data points) | 3.5 | [Full Audit §8](./FULL_SECURITY_AUDIT.md#8-mfa-browser-fingerprinting-weakness) |
+| M7 | Debug JavaScript (`sha256.jquery.debug.js`) in production | 3.5 | [Deep Dive §1](./DEEP_DIVE_SHA256_AND_ARCHITECTURE.md#1-the-sha-256-library) |
+
+---
+
+## Recommended Fixes
+
+> Full code samples and implementation details: **[FIXES_AND_RECOMMENDATIONS.md](./FIXES_AND_RECOMMENDATIONS.md)**
+
+### Immediate (24 hours)
+
+| Fix | Finding | Action |
+|-----|---------|--------|
+| **A1** | C4 — `$metadata` exposed | Restrict `$metadata` to authenticated users via `web.config` `<authorization>` block or OData middleware filter |
+| **A2** | C3 — `passwdTxt` field | Rename to `passwdDigest`; migrate from unsalted SHA-256 to bcrypt/Argon2 server-side |
+| — | C1 — Admin pages exposed | Return 401/403 for `/csr.aspx`, `/sponsor.aspx`, `/advisor.aspx` without valid session |
+| — | C5 — TLS 1.0/1.1 | Disable TLS 1.0 and 1.1 at the IIS/Akamai level |
+
+### 1 Week
+
+| Fix | Finding | Action |
+|-----|---------|--------|
+| **A3** | M1 — Unauth data endpoint | Add global `[Authorize]` filter to all OData controllers |
+| — | C6 — jQuery 1.8.3 | Upgrade to jQuery 3.7.x; audit deprecated API usage |
+| — | C7 — CORS + CSRF | Restrict CORS origins; generate real per-session CSRF tokens |
+| — | C8 — No CSP | Add `Content-Security-Policy` and `Referrer-Policy` headers |
+| — | H1 — Test credentials | Strip hardcoded `userInfo` fallback from `reliusadmin.min.js` |
+
+### 2 Weeks
+
+| Fix | Finding | Action |
+|-----|---------|--------|
+| **A4** | M2 — Token flooding | Rate-limit anonymous requests via IIS Dynamic IP Restrictions |
+| **A5** | C4 — OData queries | Add `$select`/`$filter`/`$expand` restrictions on sensitive controllers |
+| — | H5 — Birthdate bug | Fix `data-date-end-date` attribute; fix `isDate()` silent failure |
+| — | M4 — Directory listing | Disable directory browsing in IIS |
+| — | M7 — Debug JS | Replace with minified production build |
+
+### 1 Month+
+
+| Fix | Finding | Action |
+|-----|---------|--------|
+| — | H2 — AngularJS EOL | Plan migration to supported framework |
+| — | H4 — Unsalted SHA-256 | Move MFA device comparison server-side with HMAC |
+| — | M6 — MFA fingerprint | Implement Canvas/WebGL/AudioContext fingerprinting |
 
 ---
 
@@ -31,11 +117,11 @@
 
 ### Summary
 
-The front-end source code of `https://www.accountplanaccess.com/NextLevel/default.aspx` contains **multiple bugs** in the birthdate validation pipeline on the **"Request Credentials"** (forgot password) form. The birthdate field (`BIRTHDATE1`) fails validation due to a combination of a broken datepicker configuration and a flawed `isDate()` function.
+The front-end source code of `https://www.accountplanaccess.com/NextLevel/default.aspx` contains **multiple bugs** in the birthdate validation pipeline on the **"Request Credentials"** (forgot password) form. The birthdate field (`BIRTHDATE1`) fails validation due to a broken datepicker configuration and a flawed `isDate()` function.
 
-This prevents users from resetting their credentials via the self-service form.
+This **prevents users from resetting their credentials** via the self-service form.
 
-## Where the Birthdate Field Lives
+### Where the Birthdate Field Lives
 
 The birthdate input appears in the **"Request Credentials"** form (visible after clicking "Forgot User ID or Password?"):
 
@@ -47,148 +133,128 @@ The birthdate input appears in the **"Request Credentials"** form (visible after
        data-date-end-date="javascript:new Date()" />
 ```
 
----
-
-## Bugs Found
-
-### 🔴 Bug 1: Broken `data-date-end-date` Attribute (Primary Root Cause)
+### Bug 1: Broken `data-date-end-date` Attribute (Primary Root Cause)
 
 ```html
 data-date-end-date="javascript:new Date()"
 ```
 
-This attribute is used by the Bootstrap datepicker to set the maximum selectable date. **The value `javascript:new Date()` is a string literal, not executable JavaScript.** The datepicker expects a date string like `02/25/2026` or a `Date` object, but instead receives the literal string `"javascript:new Date()"`.
+The value `javascript:new Date()` is a **string literal, not executable JavaScript**. The Bootstrap datepicker expects a date string like `02/25/2026` or a `Date` object. The datepicker either fails silently, throws an internal error, or rejects all date selections.
 
-**Effect:** The datepicker either:
-- Fails silently and disables all dates (nothing selectable)
-- Throws an internal error when parsing and blocks interaction
-- Allows selection but the date comparison against the invalid end-date string causes rejection
-
-**Fix:** Replace with a valid date string or set dynamically:
-```html
-<!-- Option A: Static date (not ideal, needs updating) -->
-data-date-end-date="12/31/2026"
-```
+**Fix:**
 ```javascript
-// Option B: Dynamic (preferred)
 jQuery('#BIRTHDATE1').datepicker({ endDate: new Date() });
 ```
 
----
+### Bug 2: `isDate()` Function Rejects Valid Dates Silently
 
-### 🔴 Bug 2: `isDate()` Function Rejects Valid Dates Silently
-
-The `isDate()` function in `javascript.js` (line ~267) is called `onChange` of the birthdate field:
+When the datepicker fails to populate the field (due to Bug 1), `Object.value` is empty and `isDate()` returns `false` with **no error message** — the date silently doesn't validate.
 
 ```javascript
-function isDate(Object, blnSuppress) {
-    // ...
-    if (Object.value) {
-        inputStr = Object.value;
-    } else {
-        if (!(Object instanceof String)) {
-            inputStr = Object.value; // ← Object.value is undefined/empty = inputStr is ""
-        }
-    }
-    if (inputStr === '') {
-        return false; // ← Returns false silently with no error message
-    }
-    // ...
+if (inputStr === '') {
+    return false; // ← Silent failure, no user feedback
 }
 ```
 
-If the datepicker fails to populate the field value (due to Bug 1), `Object.value` will be empty, and `isDate()` returns `false` with **no error message shown to the user** — the date just silently doesn't validate.
+**Fix:** Show a user-facing error instead of returning false silently.
 
----
+### Bug 3: Double Validation of BIRTHDATE/BIRTHDATE1
 
-### 🟡 Bug 3: `submitForm()` Double-Validates Non-existent Field
+`forgotpassword.js` validates both `BIRTHDATE1` **and** `BIRTHDATE` (without the `1` suffix). The form fails even if `BIRTHDATE1` passes because it also checks a potentially non-existent `BIRTHDATE` field.
 
-In `forgotpassword.js`, the submit handler validates BOTH `BIRTHDATE1` **and** `BIRTHDATE` (without the `1` suffix):
+**Fix:** Consolidate: `var field = document.verification.BIRTHDATE1 || document.verification.BIRTHDATE;`
 
-```javascript
-if (document.verification.BIRTHDATE1 && blnSubmit === true) {
-    if (!isDate(document.verification.BIRTHDATE1) || document.verification.BIRTHDATE1.value == '') {
-        showAlert(false, strBirthDateRequired, '');
-        blnSubmit = false;
-    }
-}
-// ...later...
-if (document.verification.BIRTHDATE && blnSubmit === true) {
-    if (!isDate(document.verification.BIRTHDATE) || document.verification.BIRTHDATE.value == '') {
-        showAlert(false, strBirthDateRequired, '');
-        blnSubmit = false;
-    }
-}
-```
+### Bug 4: Two-Digit Year Cutoff at Year 30
 
-The form could fail even if `BIRTHDATE1` passes, because it also checks for a potentially non-existent `BIRTHDATE` field.
+Entering `12/25/25` (intending 1925) is interpreted as **2025** due to a hardcoded cutoff of 30. For a birthdate field on a retirement platform, this is incorrect.
 
----
+**Fix:** Reject two-digit years entirely for birthdate fields, or use a dynamic cutoff.
 
-### 🟡 Bug 4: Two-Digit Year Cutoff at Year 30
+### Root Cause
 
-In the `isDate()` function:
+**The primary root cause is Bug 1.** The malformed `data-date-end-date="javascript:new Date()"` attribute prevents the datepicker from initializing, leaving the field empty when the form is submitted.
 
-```javascript
-if (yyyy < 100) {
-    if (yyyy >= 30) {
-        yyyy += 1900;  // 30-99 → 1930-1999
-    } else {
-        yyyy += 2000;  // 00-29 → 2000-2029
-    }
-}
-```
-
-Entering `12/25/25` (intending 1925) would be interpreted as **2025**, which is incorrect for a birth year. The cutoff of 30 is arbitrary and could cause confusion for older birthdates.
-
----
-
-## Root Cause
-
-**The primary root cause is Bug 1.** The `data-date-end-date="javascript:new Date()"` attribute is malformed. The datepicker can't parse the end-date, so it either blocks date selection entirely or doesn't properly initialize, leaving the field empty when the form is submitted.
-
----
-
-## Security Observations
-
-While analyzing the code and API, the following additional issues were noted. See the [Full Security Audit](./FULL_SECURITY_AUDIT.md) and [OData API Exposure](./ODATA_API_EXPOSURE.md) reports for complete details.
-
-| Finding | Severity | Detail |
-|---------|----------|--------|
-| OData `$metadata` exposes full API schema without auth | **Critical** | 191KB schema reveals 60+ entity types including `passwdTxt` (plaintext password) and `ssNum` (SSN) fields — [details](./ODATA_API_EXPOSURE.md) |
-| Token entity reveals plaintext password storage | **Critical** | `passwdTxt` field name strongly implies passwords stored/transmitted as plaintext — [details](./ODATA_API_EXPOSURE.md#3-token-entity--plaintext-password-field) |
-| `ISOCountryCodes` returns data without auth | Medium | Confirms inconsistent authentication enforcement across OData endpoints |
-| SSN field transmitted in plain text over POST | Medium | `INITIALSSN` field value is sent without client-side encryption |
-| CSRF token appears static/empty | Low | `ServiceConfig.CSRFToken=''` is empty in the page source |
-| Anti-clickjacking via JS (not headers) | Low | Uses `<style>body{display:none}</style>` + JS instead of `X-Frame-Options` / CSP headers |
-| jQuery 1.8.3 loaded alongside MooTools 1.6 | Low | Ancient jQuery version with known XSS vulnerabilities (CVE-2015-9251, CVE-2019-11358, CVE-2020-11022) |
-| SHA-256 hashing done client-side with debug JS | Info | `sha256.jquery.debug.js` — debug/unminified version in production |
-| P3P header with broad permissions | Info | `CP="IDC DSP COR CURa ADMa OUR IND PHY ONL COM STA"` |
-
----
-
-## Workaround
+### Workaround
 
 If you encounter this bug:
-
 1. **Manually type** your birthdate in `MM/DD/YYYY` format (e.g., `01/15/1990`) instead of using the datepicker calendar
 2. If that doesn't work, try a **different browser** (Chrome, Firefox, Safari, Edge)
 3. Contact customer support — the phone numbers are typically available through your plan administrator
 
 ---
 
-## Vendor Disclosure
+## OData API Exposure (New Finding)
 
-- **Vendor:** Broadridge Financial Solutions / FIS (Fidelity National Information Services)
-- **Platform:** NextLevel (Relius Admin Web) — retirement plan administration
-- **Disclosure channel:** `Security@broadridge.com` (per [Broadridge Security Capabilities page](https://www.broadridge.com/about/security-capabilities))
-- **HackerOne:** [hackerone.com/broadridge](https://hackerone.com/broadridge) (Vulnerability Disclosure Policy)
-- **Date discovered:** February 25, 2026
-- **Status:** Reported
-- **SSL Certificate Org:** Fidelity National Information Services (FIS)
+> Full analysis: **[ODATA_API_EXPOSURE.md](./ODATA_API_EXPOSURE.md)**
+
+The OData v4 REST API at `/nextlevelapi` exposes its **complete schema** to unauthenticated visitors:
+
+```bash
+curl -s "https://www.accountplanaccess.com/nextlevelapi/\$metadata"
+# → 191KB XML — full Entity Data Model, no auth required
+```
+
+### Token Entity — Plaintext Password & SSN Fields
+
+```xml
+<EntityType Name="Token">
+  <Property Name="ssNum" Type="Edm.String" />          <!-- Social Security Number -->
+  <Property Name="passwdTxt" Type="Edm.String" />      <!-- PLAINTEXT PASSWORD -->
+  <Property Name="userNam" Type="Edm.String" />         <!-- Username (primary key) -->
+  <Property Name="tokenString" Type="Edm.String" />     <!-- Auth token -->
+  <Property Name="adminId" Type="Edm.Int32" />          <!-- Admin ID -->
+</EntityType>
+```
+
+### PersonalData Entity — Full PII Structure
+
+The schema reveals that the system stores: full legal name, date of birth, hire date, full mailing address (including foreign), three phone numbers with country codes, marital status, and sex — all keyed by `planId` and `pid` (participant ID).
+
+### 60+ Entity Types Exposed
+
+The metadata reveals the complete data model including:
+- **Authentication:** Token (SSN, password, username, admin ID)
+- **Personal:** PersonalData, ParticipantStatus, GeneralParticipantFile
+- **Financial:** Distributions (Roth/non-Roth balances), ContributionRates, LoanModels, Transfers, Rebalances, MyPortfolioData
+- **Transactions:** 12 TransRequest* entity types covering elections, loans, withdrawals, terminations, transfers
+- **Integrations:** SchwabSDBData (Charles Schwab brokerage), FundFactSheets, InvestProductDetails
+- **Admin:** WWWTrackingLogs (user activity), Documents, WebBinFiles, PlanStats
+
+### Unauthenticated Data Access
+
+The `ISOCountryCodes` endpoint returns data without any authentication:
+
+```bash
+curl -s "https://www.accountplanaccess.com/nextlevelapi/ISOCountryCodes"
+# → 248 country records returned, no auth required
+```
+
+### Pre-Auth Token Format
+
+Tokens embedded in the login page are hex-encoded AES ciphertext that **rotate per request**:
+
+```
+Hex:     4661456C4555314668325673535743535731665473413D3D...
+Decoded: FaElEU1Fh2VsSWCSW1fTsA==uEqcPPfkDQnWUZ0d33SsD53gP2ooomPe/lGtmsZaW0gA
+Format:  <base64-IV>==<base64-ciphertext>
+```
+
+The `ServiceSiteId` (`f77b9ff7-1c84-4e14-ac51-ae67bb908b58`) is static across all requests.
+
+---
+
+## Compliance Impact
+
+| Standard | Violation |
+|----------|-----------|
+| **PCI DSS 4.0** | TLS 1.0/1.1 enabled (Req 2.2.7); no CSP (Req 6.4.1); jQuery CVEs (Req 6.2.4) |
+| **ERISA** | Known bug prevents participants from accessing retirement accounts — potential fiduciary duty breach |
+| **SEC Reg S-P** | Known XSS CVEs on pages collecting SSNs — failure to implement reasonable safeguards |
+| **OWASP Top 10** | A01 Broken Access Control, A02 Cryptographic Failures, A05 Misconfiguration, A06 Vulnerable Components, A07 Auth Failures |
+| **WCAG 2.1** | Silent validation failure violates Success Criterion 3.3.1 (Error Identification) |
 
 ---
 
 ## License
 
-This report is provided for informational and security research purposes under responsible disclosure principles. No proprietary source code is included — only publicly visible client-side JavaScript from the login page is referenced.
+This report is provided for informational and security research purposes under responsible disclosure principles. No proprietary source code is included — only publicly visible client-side JavaScript and HTTP responses from publicly accessible endpoints are referenced.
